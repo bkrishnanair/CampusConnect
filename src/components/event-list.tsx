@@ -13,7 +13,9 @@ async function getEvents(): Promise<Event[]> {
   if (!res.ok) {
     throw new Error('Failed to fetch events');
   }
-  return res.json();
+  const data = await res.json();
+  // Handle both array and object with events property
+  return Array.isArray(data) ? data : (data.events || []);
 }
 
 export async function EventList() {

@@ -1,39 +1,35 @@
-# Stage 1: Build the React Application
+# Build and run Next.js application
+
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy package.json and package-lock.json first to leverage Docker cache
+# Install dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy the rest of the application source code
+# Copy source
 COPY . .
 
-# Build the application
+# Build the Next.js app
 RUN npm run build
 
-# Stage 2: Serve the application with Nginx
-FROM nginx:1.25-alpine
+# Production image
+FROM node:20-alpine AS runner
 
-# Remove default Nginx config
-RUN rm /etc/nginx/conf.d/default.conf
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
 
-# Copy custom Nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/
+# Copy the entire app from the builder (includes node_modules, .next, public, etc.)
+COPY --from=builder /app /app
 
-# Copy the built assets from the builder stage
-COPY --from=builder /app/build /usr/share/nginx/html
-
-# Switch to the non-root nginx user
-USER nginx
-
-# Expose port 3000
+# Expose port
 EXPOSE 3000
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=3s \
-  CMD wget --quiet --tries=1 --spider http://localhost:3000/ || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:3000/_next/ || exit 1
 
-# Start Nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Start the app using Next's production server
+CMD ["npm", "start"]

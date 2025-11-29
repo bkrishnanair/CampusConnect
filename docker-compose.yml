@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,8 +31,8 @@ services:
 
   events-api:
     build:
-      context: ./applications/events-api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: applications/events-api/Dockerfile
     ports:
       - "8080:8080"
     environment:
@@ -51,8 +49,8 @@ services:
 
   notification-service:
     build:
-      context: ./applications/notification-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: applications/notification-service/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -65,12 +63,12 @@ services:
 
   frontend:
     build:
-      context: ./applications/events-api/frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: applications/frontend/Dockerfile
     ports:
       - "3000:3000"
     environment:
-      VITE_API_URL: "http://localhost:8080"
+      NEXT_PUBLIC_API_URL: "http://events-api:8080"
     depends_on:
       events-api:
         condition: service_started

@@ -7,13 +7,13 @@ RUN apk add --no-cache dumb-init
 WORKDIR /usr/src/app
 
 # Copy package.json and package-lock.json to leverage Docker cache
-COPY package*.json ./
+COPY applications/events-api/package*.json ./
 
 # Install dependencies
 RUN npm install --production
 
 # Copy the rest of the application code
-COPY . .
+COPY applications/events-api/*.js ./
 
 # Create a non-root user 'nodejs' with a specific UID
 RUN addgroup -S nodejs && adduser -S nodejs -G nodejs -u 1001

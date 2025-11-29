@@ -1,0 +1,114 @@
+name: Build, Scan (Trivy) and Publish to ECR
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    name: Build, Scan and Publish
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      REPO_FRONTEND: campus-events/frontend
+      REPO_EVENTS_API: campus-events/events-api
+      REPO_NOTIFICATION: campus-events/notification-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS CLI v2
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y curl unzip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install
+
+      - name: Ensure ECR repositories exist
+        run: |
+          set -euo pipefail
+          ACCOUNT=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=${{ env.AWS_REGION }}
+          for REPO in "${{ env.REPO_FRONTEND }}" "${{ env.REPO_EVENTS_API }}" "${{ env.REPO_NOTIFICATION }}"; do
+            if ! aws ecr describe-repositories --repository-names "$REPO" --region "$REGION" >/dev/null 2>&1; then
+              echo "Creating ECR repo: $REPO"
+              aws ecr create-repository --repository-name "$REPO" --image-scanning-configuration scanOnPush=true --region "$REGION"
+            else
+              echo "ECR repo exists: $REPO"
+            fi
+          done
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Prepare variables
+        run: |
+          echo "REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_OUTPUT
+        id: vars
+
+      - name: Build, Scan and Push images (matrix)
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const exec = require('@actions/exec');
+            const fs = require('fs');
+
+            const REGION = process.env.AWS_REGION || 'us-east-1';
+            const ACCOUNT = process.env.AWS_ACCOUNT_ID;
+            if (!ACCOUNT) throw new Error('Missing AWS_ACCOUNT_ID secret');
+            const REGISTRY = `${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com`;
+            const services = [
+              { name: 'frontend', context: '.', dockerfile: 'applications/frontend/Dockerfile', repo: process.env.REPO_FRONTEND },
+              { name: 'events-api', context: '.', dockerfile: 'applications/events-api/Dockerfile', repo: process.env.REPO_EVENTS_API },
+              { name: 'notification-service', context: '.', dockerfile: 'applications/notification-service/Dockerfile', repo: process.env.REPO_NOTIFICATION }
+            ];
+
+            (async () => {
+              for (const svc of services) {
+                console.log(`\n--- Processing ${svc.name} ---`);
+                const tagLatest = `${REGISTRY}/${svc.repo}:latest`;
+                const tagSha = `${REGISTRY}/${svc.repo}:${process.env.GITHUB_SHA.substring(0,7)}`;
+
+                // Build image locally
+                await exec.exec('docker', ['build', '-f', `${svc.context}/${svc.dockerfile}`, '-t', tagLatest, svc.context]);
+
+                // Run Trivy scan (install if needed)
+                console.log('Running Trivy scan...');
+                try {
+                  await exec.exec('trivy', ['--version']);
+                } catch (e) {
+                  console.log('Installing Trivy...');
+                  await exec.exec('curl', ['-sSL', 'https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh', '|', 'sh', '-s', '-b', '/usr/local/bin']);
+                }
+
+                // Scan image and fail on CRITICAL
+                try {
+                  await exec.exec('trivy', ['image', '--severity', 'CRITICAL,CRITICAL', '--exit-code', '1', '--no-progress', tagLatest]);
+                } catch (scanErr) {
+                  throw new Error(`Trivy scan failed for ${svc.name} (CRITICAL found)`);
+                }
+
+                // Tag and push to ECR
+                await exec.exec('docker', ['tag', tagLatest, tagSha]);
+                await exec.exec('docker', ['push', tagLatest]);
+                await exec.exec('docker', ['push', tagSha]);
+                console.log(`Published ${svc.name} -> ${tagLatest} and ${tagSha}`);
+              }
+            })();
+
+      - name: Output published image locations
+        run: |
+          echo "Published images to ECR under account ${AWS_ACCOUNT_ID} (region ${AWS_REGION})."

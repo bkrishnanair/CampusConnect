@@ -1,13 +1,89 @@
 version: '3.8'
 
 services:
-  campusconnect:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: campus_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - campus-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d campus_db -h localhost || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - campus-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  events-api:
     build:
-      context: .
+      context: ./applications/events-api
       dockerfile: Dockerfile
-    container_name: campusconnect_app
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "postgresql://user:password@postgres:5432/campus_db"
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - campus-network
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./applications/notification-service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      AWS_ACCESS_KEY_ID: dummy
+      AWS_SECRET_ACCESS_KEY: dummy
+      AWS_REGION: us-east-1
+    networks:
+      - campus-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./applications/events-api/frontend
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
-    restart: unless-stopped
     environment:
-      - NODE_ENV=production
+      VITE_API_URL: "http://localhost:8080"
+    depends_on:
+      events-api:
+        condition: service_started
+    networks:
+      - campus-network
+    restart: unless-stopped
+
+networks:
+  campus-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: postgres_data
+  redis_data:
+    name: redis_data

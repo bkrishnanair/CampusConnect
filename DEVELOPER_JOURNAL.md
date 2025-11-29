@@ -1,59 +1,48 @@
-# Developer Journal: Getting CampusConnect Cloud-Ready
+# Technical Onboarding: CampusConnect Cloud-Native Foundation
 
-Hey Team,
+**Objective**: This document outlines the containerization and CI/CD strategy implemented to prepare the CampusConnect application for cloud deployment, in fulfillment of the project's cloud-native requirements.
 
-This journal explains the work I've done over the last week to get our application ready for the cloud, as per the project requirements. The main goal was to containerize our apps so they can run anywhere—on our laptops or on AWS—in a consistent way.
+---
 
-### Part 1: Why We're Using Microservices (The "Band")
+### 1. System Architecture: Microservices
 
-The professor wants a "Cloud-Native Application," which means it needs to be scalable and resilient. A single, monolithic application (where the frontend, backend, and everything else is one big program) is simple to start, but can be risky. If one small part crashes (like a notification feature), the whole app could go down.
+A **Microservices Architecture** was chosen to ensure scalability, resilience, and technological flexibility. This approach decouples the primary functions of the application into independently deployable services.
 
-So, we chose a **Microservices Architecture**. Think of it like a band:
+*   **Frontend Service (Next.js/React)**: Provides the user interface.
+*   **Events API Service (Node.js/Express)**: Manages core business logic and data persistence.
+*   **Notification Service (Python/Flask)**: Handles asynchronous background processing.
 
-*   **The Singer (Frontend)**: This is our Next.js/React app. It's what the user sees and interacts with. Its only job is to look good and talk to the backend.
-*   **The Guitarist (Events API)**: This is our Node.js/Express backend. It's the brain. It handles creating events, saving them to the database, and is the core of our application.
-*   **The Drummer (Notification Service)**: This is our Python/Flask app. It handles background tasks. When a new event is created, the Events API tells the Notification Service, which then does its job without slowing down the main API.
+This separation ensures that a failure in one service (e.g., Notifications) does not impact the availability of others, thereby increasing system resilience.
 
-**Why is this better?** If the "drummer" (Notification Service) has an issue, the "singer" and "guitarist" can keep playing. The website stays online, which is key for resilience.
+### 2. Containerization with Docker
 
-### Part 2: Solving "It Works on My Machine" with Docker
+To ensure a consistent and reproducible runtime environment across all machines (local and cloud), each service has been containerized using Docker.
 
-We all have different computers (Mac, Windows) and our AWS server will be Linux. To make sure our code runs exactly the same everywhere, we're using **Docker**.
+*   **Per-Service Dockerfiles**: Each service has a dedicated `Dockerfile` located in its respective `/applications` directory, tailored to its specific runtime and dependencies.
+*   **Security**: Containers are configured to run with non-root user privileges, adhering to security best practices.
 
-Think of a Docker container as a sealed box. Inside each box, we put one of our services (e.g., the Events API) along with everything it needs to run (like the correct version of Node.js).
+### 3. Local Orchestration with Docker Compose
 
-*   **The "Recipe" (`Dockerfile`)**: For each of our three services, I created a `Dockerfile`. This is a simple text file that gives Docker the step-by-step instructions to build one of these sealed boxes.
-*   **Security First**: The Dockerfiles are configured to run our apps as a restricted user (not as the super-admin "root"), which is a standard security best practice.
+The `docker-compose.yml` file orchestrates the entire application stack for local development and testing.
 
-### Part 3: Running Everything at Once with Docker Compose
+*   **Unified Startup**: A single command (`docker compose up --build`) builds, networks, and runs all five services (three application services plus PostgreSQL and Redis).
+*   **Service Discovery**: Services communicate over a shared Docker network using service names (e.g., `http://events-api:8080`).
+*   **Dependency Management**: Health checks are implemented to ensure services like PostgreSQL are fully operational before dependent application services start, preventing startup failures.
 
-Now we have three application containers, a database, and Redis. To run and test them all together, we use **Docker Compose**.
+### 4. CI/CD with GitHub Actions & AWS ECR
 
-The `docker-compose.yml` file is like an instruction manual for our entire local setup. It defines all five services and connects them.
+An automated CI/CD pipeline has been established using GitHub Actions to build, secure, and store the container images.
 
-*   **One Command to Rule Them All**: Instead of opening five terminal windows, you can now just run `docker compose up --build`. This single command builds the containers, creates a private network for them, and starts everything in the correct order.
-*   **Smart Networking**: The services can talk to each other using their names. For example, the frontend can make a request to `http://events-api:8080` without needing to know its IP address.
-*   **Health Checks**: I added a rule to prevent startup errors. The Events API will wait until the Postgres database is fully healthy and ready for connections before it starts.
+*   **Trigger**: The workflow runs on every push to the `main` branch.
+*   **Process**:
+    1.  **Parallel Builds**: Builds Docker images for all three services concurrently.
+    2.  **Security Scanning**: Integrates **Trivy** to scan images for critical vulnerabilities. A failed scan will halt the pipeline.
+    3.  **Registry Push**: On success, images are pushed to **Amazon Elastic Container Registry (ECR)**, making them available for cloud deployment.
 
-**Proof**: If you run the `docker compose up` command, you can open `http://localhost:3000`, create an event, and see the logs from all three services in your terminal. It all works together!
+### 5. Project Status & Next Steps
 
-### Part 4: The Automation Pipeline to the Cloud (CI/CD)
+*   **Current Status**: The application is fully containerized, and the CI/CD automation pipeline is complete. The system is ready for deployment.
+*   **Next Steps (Infrastructure)**: Provision the AWS EKS (Kubernetes) cluster using Terraform.
+*   **Next Steps (Deployment)**: Once the cluster is active, create Kubernetes manifests to deploy the container images from ECR.
 
-To get our container "boxes" to AWS, we need an automated pipeline. We can't just email the files. This is where CI/CD (Continuous Integration/Continuous Deployment) comes in.
-
-*   **The "Cloud Garage" (AWS ECR)**: Amazon Elastic Container Registry (ECR) is where we'll store our final Docker images. Think of it as GitHub, but for Docker images.
-*   **The "Robot" (GitHub Actions)**: I've set up a workflow in `.github/workflows/ecr-publish.yml`. This is a "robot" that automates the process:
-    1.  Anytime we push code to the `main` branch, the robot wakes up.
-    2.  It builds the Docker images for all three services.
-    3.  It runs a **Trivy security scan** on each image. If a critical vulnerability is found, the process stops to prevent deploying insecure code.
-    4.  If the scan passes, it pushes the images to our "Cloud Garage" (ECR).
-
-### Part 5: Where We Are and What's Next
-
-My part is now complete. The application is fully containerized, and the CI/CD pipeline is built and ready to be connected to AWS.
-
-*   **My Status**: Done with local setup and containerization.
-*   **What's Next (Infrastructure Team)**: The next step is to use Terraform to build the actual servers and Kubernetes (EKS) cluster on AWS.
-*   **What's Next (Kubernetes Team)**: Once the cluster is built and our images are in ECR, they will write the Kubernetes files to deploy our services to the cloud.
-
-I'm currently waiting on the AWS credentials to activate the final step of the CI/CD pipeline. Let me know if you have any questions!
+The backend and CI/CD foundation is complete. The project is pending AWS credentials to finalize the ECR push configuration.

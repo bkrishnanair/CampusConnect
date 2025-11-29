@@ -1,126 +1,83 @@
 # CampusConnect: Smart Campus Event Management
 
-CampusConnect is a modern, production-ready starter kit for a smart campus event management system. This project is designed as a capstone demonstration, built with Next.js and showcasing key DevOps principles like containerization, observability, and resilience within a well-structured monolithic architecture.
+CampusConnect is a modern, production-ready application for a smart campus event management system. This project is built using a **distributed microservices architecture**, showcasing key DevOps and cloud-native principles like containerization, orchestration, and CI/CD.
 
-While the original proposal specified a multi-service, multi-language microservices architecture, this implementation adapts those concepts into a single, cohesive Next.js application. This approach simplifies local development and deployment while still maintaining a clear separation of concerns between the frontend UI, backend API, and notification logic.
+## Architecture: Distributed Microservices
 
-## Architecture
+The application is architected as a distributed system, where different logical components are separated into independent services. This approach ensures scalability, resilience, and technological flexibility.
 
-The application is architected as a "well-structured monolith," where different logical components are separated within the same Next.js framework.
-
-- **Frontend**: A responsive UI built with React Server Components and Client Components, styled with Tailwind CSS.
-- **Events API**: Backend logic handled by Next.js API Routes, providing RESTful endpoints for event management.
-- **Notification Logic**: Integrated directly into the Events API, simulating a call to a separate notification service. This demonstrates inter-service communication patterns and resilience.
+- **Frontend Service**: A responsive UI built with **Next.js/React**, running on port `3000`.
+- **Events API Service**: A backend service built with **Node.js/Express**, responsible for business logic and data persistence, running on port `8080`.
+- **Notification Service**: A background worker service built with **Python/Flask** for handling asynchronous tasks, running on port `8000`.
+- **Infrastructure**: The application stack also includes **PostgreSQL** for data storage and **Redis** for caching and messaging.
 
 ### Architecture Diagram (Mermaid.js)
 
 ```mermaid
 graph TD
-    subgraph "Next.js Application (Single Container)"
-        direction LR
-        A[Frontend - React/Tailwind]
-        B[Events API - API Routes]
-        C[Notification Logic]
+    U[User] -- Browser --> FE[Frontend Service - Port 3000]
+
+    subgraph "Docker / AWS EKS"
+        
+        FE -- HTTP API Calls --> API[Events API Service - Port 8080]
+        API -- Publishes Job --> R[Redis]
+        API -- Stores/Retrieves Data --> DB[(Postgres DB)]
+        
+        subgraph "Async Processing"
+          NS[Notification Service - Port 8000] -- Subscribes to --> R
+        end
     end
 
-    U[User] -- Interacts with --> A
-    A -- Fetches & Creates Events --> B
-    B -- Stores data in --> D[(In-Memory Store)]
-    B -- Simulates async call --> C
-    C -- Logs to --> E([Structured JSON Log])
-    
-    subgraph "Kubernetes / Cloud Environment"
-      direction TB
-      K[K8s Probe] -- Checks --> H[GET /api/health]
-      L[CloudWatch/Logging] -- Ingests --> E
-    end
+    U -- Sees updated UI --> FE
 
-    B -- Responds to --> A
 ```
 
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
 - [Node.js](https://nodejs.org/) (v18 or later)
+- [Python](https://www.python.org/) (v3.9 or later)
 - [Docker](https://www.docker.com/get-started) & [Docker Compose](https://docs.docker.com/compose/install/)
 
-## Quick Start
+## Quick Start: Running with Docker Compose
 
-### Local Development (Recommended)
+The entire microservices stack is orchestrated with Docker Compose for a seamless local development experience.
 
-1.  **Install dependencies:**
+1.  **Clone the repository:**
     ```bash
-    npm install
+    git clone <repository-url>
+    cd <repository-directory>
     ```
 
-2.  **Run the development server:**
+2.  **Build and run all services using Docker Compose:**
     ```bash
-    npm run dev
+    docker compose up --build
     ```
 
-    The application will be available at [http://localhost:9002](http://localhost:9002).
+    This command will:
+    - Build the individual Docker images for the Frontend, Events API, and Notification services.
+    - Pull the official images for PostgreSQL and Redis.
+    - Create a shared network and start all five containers.
 
-### Running with Docker
-
-1.  **Build and run the container using Docker Compose:**
-    ```bash
-    docker-compose up --build
-    ```
-
-    The application will be available at [http://localhost:3000](http://localhost:3000).
+3.  **Access the application:**
+    - The **Frontend** will be available at [http://localhost:3000](http://localhost:3000).
+    - The **Events API** will be available at [http://localhost:8080](http://localhost:8080).
+    - The **Notification Service** will be available at [http://localhost:8000](http://localhost:8000).
 
 ## API Documentation
 
-The following API endpoints are available:
+The following API endpoints are exposed by the **Events API Service**:
 
-### Events API
+### Events API (`http://localhost:8080`)
 
 - **`GET /api/events`**
   - **Description**: Retrieves a list of all campus events.
-  - **Success Response (200)**:
-    ```json
-    [
-      {
-        "id": "evt-1",
-        "title": "Tech Talk: AI in Education",
-        "date": "2024-10-15T14:00:00.000Z",
-        "description": "Join us for an insightful discussion on how AI is transforming the educational landscape."
-      }
-    ]
-    ```
 
 - **`POST /api/events`**
   - **Description**: Creates a new event.
-  - **Request Body**:
-    ```json
-    {
-      "title": "New Event Title",
-      "date": "YYYY-MM-DD",
-      "description": "Event description."
-    }
-    ```
-  - **Success Response (201)**:
-    ```json
-    {
-      "id": "evt-...",
-      "title": "New Event Title",
-      "date": "...",
-      "description": "Event description."
-    }
-    ```
 
-### Health Check API
-
-- **`GET /api/health`**
-  - **Description**: A health check endpoint for monitoring services like Kubernetes probes.
-  - **Success Response (200)**:
-    ```json
-    {
-      "status": "healthy",
-      "timestamp": "2024-08-01T12:00:00.000Z",
-      "services": {
-        "events-api": "healthy",
-        "notification-service": "healthy"
-      }
-    }
-    ```
+### Health Check APIs
+Each service has its own health check endpoint for monitoring:
+- **Frontend**: `http://localhost:3000/api/health`
+- **Events API**: `http://localhost:8080/api/health`
+- **Notification Service**: `http://localhost:8000/health`

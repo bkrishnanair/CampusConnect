@@ -2,88 +2,62 @@
 
 This document provides a deeper dive into the technical decisions and design patterns used in the CampusConnect application.
 
-## Microservices vs. Structured Monolith
+## Architecture: Distributed Microservices
 
-The original project prompt called for a distributed microservices architecture with separate services for the frontend, events API, and notifications.
-
-**Decision**: We've adapted this into a **"well-structured monolith"** using Next.js.
+The project is implemented using a **distributed microservices architecture** to ensure scalability, resilience, and separation of concerns, meeting the core requirements for a cloud-native application.
 
 **Rationale**:
-1.  **Simplified Development**: A single codebase, build process, and development server (`npm run dev`) dramatically simplifies the developer experience, especially for a "Starter Kit."
-2.  **Reduced Operational Overhead**: Managing one container is simpler than orchestrating three separate services with their own networking, deployment pipelines, and environment configurations.
-3.  **Clear Separation of Concerns**: By using Next.js API Routes, we still achieve a clean logical separation between the frontend presentation layer (React components in `/app`) and the backend business logic (API handlers in `/app/api`). This structure makes it easy to "break out" the API into a true microservice in the future if scale demands it.
-4.  **Performance**: Co-locating the frontend and backend can lead to lower latency for data fetching, as they are part of the same application process.
+1.  **Scalability**: Each service can be scaled independently. If the Events API is under heavy load, we can scale it up without touching the Frontend or Notification services.
+2.  **Resilience & High Availability**: The services are decoupled. A failure in the Notification Service will not bring down the main Events API or the user-facing Frontend.
+3.  **Technology Flexibility**: Each service is built with the best technology for its job (Next.js for the frontend, Node.js/Express for the API, Python/Flask for notifications).
+4.  **Team Autonomy**: In a larger team, different squads could own different services, allowing for independent development and deployment cycles.
 
-The notification service is simulated within the Events API to demonstrate resilience patterns (e.g., using `try...catch` to handle a failing "downstream" service) without adding the complexity of another running process.
+Our architecture consists of three core application services and two backing infrastructure services:
 
-## Container Strategy
+*   **Frontend Service (Next.js/React)**: The user interface that runs on port `3000`. It provides the interactive web experience for students and faculty to view and create events.
+*   **Events API Service (Node.js/Express)**: The central nervous system of the application, running on port `8080`. It handles business logic, data validation, and communication with the PostgreSQL database.
+*   **Notification Service (Python/Flask)**: A background service on port `8000` responsible for handling asynchronous tasks like sending notifications.
+*   **PostgreSQL Database**: The primary persistence layer for event data.
+*   **Redis**: Used for caching, session management, or as a message broker (future enhancement).
 
-The application is containerized using a multi-stage Docker build to create a lean, production-optimized image.
+## Containerization & Orchestration
 
-**File**: `Dockerfile`
+### Docker Strategy
+Each of the three application services has its own dedicated `Dockerfile` located in its respective `/applications` sub-directory.
 
-**Stage 1: `builder`**
-- **Base Image**: `node:18-alpine`
-- **Purpose**: This stage is dedicated to building the application. It installs all `devDependencies`, copies the source code, and runs `npm run build`. This compiles the Next.js app into an optimized `.next` directory.
+-   **Independent Environments**: Each `Dockerfile` is tailored to its specific technology stack (Node.js, Python), ensuring that each service has a consistent, reproducible, and isolated environment.
+-   **Production Optimization**: The Dockerfiles are configured for production, using best practices like multi-stage builds to create lean final images and running as non-root users (`node` or `python`) for enhanced security.
 
-**Stage 2: `runner`**
-- **Base Image**: `node:18-alpine`
-- **Purpose**: This is the final, lightweight production image.
-- **Process**:
-    1.  It installs *only* production dependencies (`npm ci --omit=dev`).
-    2.  It copies the built application from the `builder` stage (`--from=builder`).
-    3.  The final image exposes port 3000 and runs the application with `npm start`, which executes `next start`. This serves the application using Next.js's highly optimized production server.
+### Local Orchestration with Docker Compose
+For local development and testing, the entire stack is orchestrated using a single `docker-compose.yml` file.
 
-**Why Multi-Stage?**
-- **Security**: `devDependencies` and build tools are not included in the final image, reducing the potential attack surface.
-- **Size**: The final image is significantly smaller because it doesn't contain the entire source code, build artifacts, or development-only packages. This leads to faster container registry pushes/pulls and quicker startup times.
+-   **One-Command Startup**: Developers can run `docker compose up --build` to build all images, create a shared network, and start all five services in the correct order.
+-   **Service Discovery**: Services communicate with each other using their service names over a private Docker network (e.g., the Frontend calls the API at `http://events-api:8080`).
+-   **Health Checks**: The `docker-compose.yml` includes `healthcheck` configurations to ensure that services like Postgres are fully ready before the applications that depend on them are started, preventing startup race conditions and errors.
 
-## Observability Strategy: Structured JSON Logging
+## CI/CD: The Bridge to the Cloud
 
-Observability is a critical component of modern cloud-native applications. Instead of plain-text logs, this application uses structured JSON logging.
+The project uses a CI/CD pipeline defined in `.github/workflows/ecr-publish.yml` to automate the process of building, securing, and storing our container images.
 
-**Implementation**: In the API routes (`/app/api/**`), logging is done by passing a JavaScript object to `console.log` or `console.error`.
+-   **Automation with GitHub Actions**: The workflow triggers automatically on any push to the `main` branch.
+-   **Parallel Builds**: It efficiently builds the Docker images for all three services simultaneously.
+-   **Security Scanning with Trivy**: Before an image is stored, it is scanned for known security vulnerabilities using Trivy. If a "CRITICAL" vulnerability is found, the pipeline fails, preventing insecure code from ever reaching the cloud registry.
+-   **Push to AWS ECR**: Upon a successful scan, the tagged images are pushed to Amazon Elastic Container Registry (ECR), making them ready for deployment to a container orchestrator like AWS EKS.
 
+## Observability: Structured JSON Logging
+
+To ensure the system is observable and easy to debug, all services implement structured JSON logging.
+
+**Example from Events API**:
 ```javascript
 console.log({
   level: "INFO",
-  message: "Notification sent for new event",
-  service: "notification-service",
-  event_title: newEvent.title
+  message: "Event created successfully",
+  service: "events-api",
+  event_id: newEvent.id
 });
 ```
-
 **Why Structured JSON?**
-- **Machine-Readability**: Cloud logging platforms like **AWS CloudWatch Logs Insights**, Google Cloud Logging, or Datadog can automatically parse JSON.
-- **Powerful Queries**: This enables powerful, fast queries. You can filter logs based on specific fields (e.g., `level = "ERROR"`, `service = "events-api"`).
-- **Rich Context**: It's easy to add rich, contextual information to every log entry (e.g., request IDs, user IDs, event details), which is invaluable for debugging complex issues.
-- **Standardization**: It enforces a consistent logging format across the entire application, making logs predictable and easier to work with.
-
-## Future Roadmap
-
-This starter kit provides a solid foundation. The following are logical next steps for evolving the application into a full-fledged production system.
-
-- [ ] **Replace In-Memory Store with a Database**
-    - [ ] Integrate a database client (e.g., Prisma or Drizzle ORM).
-    - [ ] Connect to a managed database service like AWS RDS (PostgreSQL) or Vercel Postgres.
-    - [ ] Update API routes to perform CRUD operations against the database.
-
-- [ ] **Add User Authentication**
-    - [ ] Implement a solution like NextAuth.js or Clerk.
-    - [ ] Protect the "Create Event" functionality so only authenticated users can access it.
-    - [ ] Associate created events with a user ID.
-
-- [ ] **Externalize the Notification Service**
-    - [ ] Create a separate service (e.g., in Node.js, Python, or Go) for handling notifications.
-    - [ ] Replace the simulated call in the Events API with a real HTTP request to the new service.
-    - [ ] Consider using a message queue (like AWS SQS or RabbitMQ) for more robust, asynchronous communication between the Events API and Notification Service.
-
-- [ ] **Enhance Frontend**
-    - [ ] Add loading states for form submissions.
-    - [ ] Implement optimistic UI updates for a faster perceived experience.
-    - [ ] Add event filtering and search functionality.
-    - [ ] Create a dedicated page for individual event details.
-
-- [ ] **Improve CI/CD**
-    - [ ] Set up a GitHub Actions workflow to automatically build and push the Docker image to a registry (e.g., Amazon ECR, Docker Hub).
-    - [ ] Add automated testing (unit tests with Jest, end-to-end tests with Playwright or Cypress).
+-   **Machine-Readability**: Cloud logging platforms like AWS CloudWatch can automatically parse JSON, enabling powerful queries.
+-   **Powerful Queries**: This allows us to filter logs based on specific fields (e.g., `level = "ERROR"`, `service = "notification-service"`).
+-   **Rich Context**: It's easy to add contextual information to every log entry, which is invaluable for tracing requests across multiple services.
